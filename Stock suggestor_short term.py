@@ -6,7 +6,7 @@ ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=ce
 import yfinance as yf
 import numpy as np
 
-def intrinsic_value_calculator(ticker, terminal_growth=0.00, years=2, max_growth_cap=0.50):
+def intrinsic_value_calculator(ticker, terminal_growth=0.01, years=2, max_growth_cap=0.50):
     stock = yf.Ticker(ticker)
 
     # Free Cash Flow (average of 2 years)
@@ -36,7 +36,7 @@ def intrinsic_value_calculator(ticker, terminal_growth=0.00, years=2, max_growth
             if op_cf is not None:
                 return float(op_cf) - float(capex or 0)
 
-        # Fallbacks if there's no cash flow
+        # Fallbacks
         fcf = stock.info.get("freeCashflow", None)
         if fcf:
             try:
@@ -103,7 +103,7 @@ def intrinsic_value_calculator(ticker, terminal_growth=0.00, years=2, max_growth
     growth_rate = (auto_growth + analyst_growth) / 2.0 if analyst_growth and analyst_growth > 0 else auto_growth
     if not np.isfinite(growth_rate):
         growth_rate = 0.05
-    growth_rate = max(min(growth_rate, max_growth_cap), -0.5)
+    growth_rate = max(min(growth_rate, max_growth_cap), -0.6)
 
     # Discount Rate (CAPM)
     risk_free, market_return = 0.045, 0.09
@@ -123,7 +123,7 @@ def intrinsic_value_calculator(ticker, terminal_growth=0.00, years=2, max_growth
     if denom <= 0:
         raise ValueError("Discount rate must exceed terminal growth")
 
-    # DCF Projection (linear decay)
+    # DCF Projection (linear growth decay)
     projected_fcfs = []
     last_fcf = float(fcf)
     start_growth, end_growth = growth_rate, terminal_growth + 0.01
@@ -142,7 +142,9 @@ def intrinsic_value_calculator(ticker, terminal_growth=0.00, years=2, max_growth
     equity_value = enterprise_value - net_debt
     dcf_value = equity_value / shares_outstanding
 
-    # Relative Valuations: P/E, EV/EBITDA, P/FCF
+    # Relative Valuation Calculations:
+
+    # EPS and price
     eps = stock.info.get("forwardEps") or stock.info.get("trailingEps")
     try:
         eps = float(eps) if eps else None
@@ -155,60 +157,86 @@ def intrinsic_value_calculator(ticker, terminal_growth=0.00, years=2, max_growth
     pe_val = None
     ev_ebitda_val = None
     p_fcf_val = None
+    industry_pe_val = None
+    hist_pe_val = None
 
+    # P/E multiple
     forward_pe = stock.info.get("forwardPE")
     trailing_pe = stock.info.get("trailingPE")
     chosen_pe = forward_pe or trailing_pe
-
     if eps and chosen_pe:
         pe_val = chosen_pe * eps
 
+    # EV/EBITDA
     ev_to_ebitda = stock.info.get("enterpriseToEbitda")
     if ev_to_ebitda and ev_to_ebitda > 0:
         ebitda = stock.financials.loc["EBITDA"].iloc[0] if "EBITDA" in stock.financials.index else None
         if ebitda and shares_outstanding > 0:
             ev_ebitda_val = (ebitda * ev_to_ebitda - net_debt) / shares_outstanding
 
+    # P/FCF
     if fcf and shares_outstanding > 0 and price > 0:
         p_fcf = (price * shares_outstanding) / fcf
         if p_fcf > 0:
             p_fcf_val = (fcf * p_fcf) / shares_outstanding
 
-    rel_candidates = [v for v in [pe_val, ev_ebitda_val, p_fcf_val] if v and np.isfinite(v)]
-    relative_value = np.median(rel_candidates) if rel_candidates else dcf_value
+    # Industry P/Es
+    sector = stock.info.get("sector", "Unknown")
+    sector_pe_map = {"Technology": 25, "Communication Services": 20, "Consumer Cyclical": 20,
+                     "Consumer Defensive": 18, "Healthcare": 18, "Financial Services": 14,
+                     "Industrials": 16, "Energy": 12, "Utilities": 10,
+                     "Basic Materials": 14, "Real Estate": 15}
+    industry_pe = sector_pe_map.get(sector, chosen_pe or 15)
+    if eps and industry_pe:
+        industry_pe_val = industry_pe * eps
 
-
-    # Historical Valuation Check (compare current P/E vs 5yr median)
+    # Historical P/E
     hist = stock.history(period="5y")
-    hist_pe = None
     if not hist.empty and eps and eps > 0:
         hist["PE"] = hist["Close"] / eps
         hist_pe = hist["PE"].median()
+        if hist_pe and np.isfinite(hist_pe):
+            hist_pe_val = hist_pe * eps
 
-    valuation_vs_history = None
-    if hist_pe and chosen_pe:
-        valuation_vs_history = chosen_pe / hist_pe
+    # Average everything
+    # Group 1: current multiples
+    rel_current = [v for v in [pe_val, ev_ebitda_val, p_fcf_val] if v and np.isfinite(v)]
+    # Group 2: Anchors(makes sure the relative value has doesn't explode)
+    rel_anchors = [v for v in [industry_pe_val, hist_pe_val] if v and np.isfinite(v)]
+
+    if rel_current or rel_anchors:
+        current_val = np.median(rel_current) if rel_current else None
+        anchor_val = np.median(rel_anchors) if rel_anchors else None
+        #Set a bias of 60 to 40
+        if current_val and anchor_val:
+            relative_value = 0.6 * current_val + 0.4 * anchor_val
+        elif current_val:
+            relative_value = current_val
+        else:
+            relative_value = anchor_val
+    else:
+        relative_value = dcf_value
 
     # Weights
     intrinsic_value = dcf_value * 0.4 + relative_value * 0.6
 
     return {"Intrinsic Value(estimate)": intrinsic_value}
 
-
-def run_screen(tickers, terminal_growth=0.01):
+# Goes through each ticker and runs the intrinsic value calc on it then return a sorted data frame with length of 50
+def run_screen(tickers):
     results = []
     for ticker in tickers:
         try:
             stock = yf.Ticker(ticker)
             price = stock.history(period="1d")["Close"].iloc[-1]
-            intrinsic = intrinsic_value_calculator(ticker, terminal_growth)["Intrinsic Value(estimate)"]
-            diff = (intrinsic - price) / price  #upside
-            results.append({"Ticker": ticker, "Price": price, "Intrinsic": intrinsic, "Upside multiple": diff})
+            intrinsic = intrinsic_value_calculator(ticker)["Intrinsic Value(estimate)"]
+            upside = ((intrinsic-price)/price)*100  #%upside of the stock
+            results.append({"Ticker": ticker, "Price": price, "Intrinsic": intrinsic, "% Upside":upside})
         except Exception as e:
             print(f"Skipping {ticker}: {e}")
             continue
     df = pd.DataFrame(results)
-    df = df.sort_values("Upside multiple", ascending=False).head(50)
+    df = df.sort_values("% Upside", ascending=False).head(50)
     return df
 
 
@@ -223,7 +251,7 @@ def get_sp500_tickers():
         tables = pd.read_html(response.read())
     # Extract symbols as a list of strings
     sp500 = tables[0]["Symbol"].tolist()
-    # Some symbols have dots (example:BRK.B). yfinance must use dashes instead.
+    # Some symbols on wikipedia have dots in between them but yfinance must use dashes instead.
     sp500 = [s.replace(".", "-") for s in sp500]
     return sp500
 
