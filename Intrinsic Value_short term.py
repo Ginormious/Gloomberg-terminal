@@ -1,8 +1,3 @@
-import ssl
-import certifi
-
-ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
-
 import yfinance as yf
 import numpy as np
 
@@ -123,7 +118,30 @@ def intrinsic_value_calculator(ticker, terminal_growth=0.01, years=2, max_growth
         # Combine everything together
         final_intrinsic = 0.60 * intrinsic_per_share + book_component + float_uplift
 
-        return {"Intrinsic Value(estimate)": final_intrinsic}
+        return {
+            "Intrinsic Value(estimate)": final_intrinsic,
+            "Current price": price,
+            "eps_source": eps_source,
+            "eps": eps,
+            "net_income": net_income,
+            "shares_outstanding": shares_outstanding,
+            "growth_rate": growth_rate,
+            "cost_of_equity": cost_of_equity,
+            "projected_eps_sum": sum(projected_eps),
+            "last_eps": last_eps,
+            "terminal_pe": terminal_pe,
+            "terminal_value": terminal_value,
+            "intrinsic_per_share": intrinsic_per_share,
+            "book_value_per_share_original": info.get("bookValue"),
+            "book_value_per_share_used": book_value_per_share,
+            "book_scaled": scaled,
+            "book_scale_factor": scale_factor,
+            "book_component": book_component,
+            "float_uplift": float_uplift,
+            "final_intrinsic": final_intrinsic,
+            "price_used": price,
+            "Sector": sector,
+            "Industry": industry}
 
     # If company is not in financials/insurance/reinsurance
     # Free Cash Flow (average of 2 years)
@@ -337,42 +355,73 @@ def intrinsic_value_calculator(ticker, terminal_growth=0.01, years=2, max_growth
     # Weights
     intrinsic_value = dcf_value * 0.4 + relative_value * 0.6
 
-    return {"Intrinsic Value(estimate)": intrinsic_value}
-
-# Goes through each ticker and runs the intrinsic value calc on it then return a sorted data frame with length of 50
-def run_screen(tickers):
-    results = []
-    for ticker in tickers:
+    return {
+        "Sector": sector,
+        "Industry": industry,
+        "DCF Value": dcf_value,
+        "Relative Value": relative_value,
+        "Intrinsic Value (estimate)": intrinsic_value,
+        "Current price": price,
+        "Percent upside": 100 * (intrinsic_value - price) / price,
+        "Assumed Growth Rate": growth_rate,
+        "FCF used (2yr avg)": fcf,
+        "Net Debt": net_debt,
+        "Enterprise Value": enterprise_value,
+        "Discount Rate": discount_rate,
+        "Terminal Growth Rate": terminal_growth,
+        "Shares Outstanding": shares_outstanding,
+        "Sector P/E value used": sector_pe if sector_pe else None,
+        "P/E based Value": pe_val,
+        "EV/EBITDA based Value": ev_ebitda_val,
+        "P/FCF based Value": p_fcf_val,
+        "5yr Median P/E": hist_pe_val,
+    }
+# Main body
+if __name__ == "__main__":
+    ticker = input("Please enter ticker symbol: ").strip().upper()
+    stock = yf.Ticker(ticker)
+    info = stock.info
+    sector = info.get("sector", "Unknown")
+    industry = info.get("industry", "Unknown")
+    if not ("Financial Services" in sector) or not ("Insurance" in sector) or not ("Reinsurance" in industry):
         try:
-            stock = yf.Ticker(ticker)
-            price = stock.history(period="1d")["Close"].iloc[-1]
-            intrinsic = intrinsic_value_calculator(ticker)["Intrinsic Value(estimate)"]
-            upside = ((intrinsic-price)/price)*100  #%upside of the stock
-            results.append({"Ticker": ticker, "Price": price, "Intrinsic": intrinsic, "% Upside":upside})
+            result = intrinsic_value_calculator(ticker)
+            print(f"\nValuation summary for {ticker}:\n")
+            for metric, value in result.items():
+                if value is None:
+                    continue
+                #Percentages
+                if "Rate" in metric or "Growth" in metric:
+                    if isinstance(value, (int, float)):
+                        print(f"{metric}: {value:.2%}")
+                    else:
+                        print(f"{metric}: {value}")
+                # Multiples
+                elif "P/E" in metric or "EV/EBITDA" in metric or "P/FCF" in metric:
+                    if isinstance(value, (int, float)):
+                        print(f"{metric}: ${value:,.2f}")
+                    else:
+                        print(f"{metric}: {value}")
+                # Values
+                elif metric in ("DCF Value", "Relative Value", "Intrinsic Value (estimate)",
+                                "Enterprise Value", "Net Debt",
+                                "P/E based Value", "EV/EBITDA based Value", "P/FCF based Value"):
+                    if isinstance(value, (int, float)):
+                        print(f"{metric}: ${value:,.2f}")
+                    else:
+                        print(f"{metric}: {value}")
+                # Numbers
+                elif metric == "Shares Outstanding":
+                    print(f"{metric}: {int(value):,}")
+                # Strings
+                elif isinstance(value, str):
+                    print(f"{metric}: {value}")
+                # Default
+                else:
+                    print(f"{metric}: {value}")
         except Exception as e:
-            print(f"Skipping {ticker}: {e}")
-            continue
-    df = pd.DataFrame(results)
-    df = df.sort_values("% Upside", ascending=False).head(50)
-    return df
+            print(f"Error calculating valuation: {e}")
+    else:
+        result = intrinsic_value_calculator(ticker)
+        print(f"\nValuation summary for {ticker}:\n")
 
-
-# S&P 500 tickers
-import urllib.request
-import pandas as pd
-
-def get_sp500_tickers():
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"})
-    with urllib.request.urlopen(req) as response:
-        tables = pd.read_html(response.read())
-    # Extract symbols as a list of strings
-    sp500 = tables[0]["Symbol"].tolist()
-    # Some symbols on wikipedia have dots in between them but yfinance must use dashes instead.
-    sp500 = [s.replace(".", "-") for s in sp500]
-    return sp500
-
-
-sp500 = get_sp500_tickers()
-top50 = run_screen(sp500)
-print(top50)
