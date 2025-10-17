@@ -1,7 +1,7 @@
 import yfinance as yf
 import numpy as np
 
-def intrinsic_value_calculator(ticker, terminal_growth=0.01, years=2, max_growth_cap=0.15):
+def intrinsic_value_calculator(ticker, terminal_growth=0.01, years=2, max_growth_cap=0.20):
     stock = yf.Ticker(ticker)
     info = stock.info
     sector = info.get("sector", "Unknown")

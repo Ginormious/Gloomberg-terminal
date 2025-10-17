@@ -1,7 +1,7 @@
 import yfinance as yf
 import numpy as np
 
-def intrinsic_value_calculator(ticker, terminal_growth=0.01, years=10, max_growth_cap=0.15):
+def intrinsic_value_calculator(ticker, terminal_growth=0.01, years=10, max_growth_cap=0.20):
     stock = yf.Ticker(ticker)
     info = stock.info
     sector = info.get("sector", "Unknown")
@@ -62,6 +62,7 @@ def intrinsic_value_calculator(ticker, terminal_growth=0.01, years=10, max_growt
         except Exception:
             beta = 1.0
         cost_of_equity = risk_free + beta * (market_return - risk_free)
+        cost_of_equity= np.clip(cost_of_equity, 0.08, 0.10)# restricts it to industry standard
 
         # Project EPS (per-share)
         projected_eps = []
@@ -77,8 +78,8 @@ def intrinsic_value_calculator(ticker, terminal_growth=0.01, years=10, max_growt
         denom = cost_of_equity - terminal_growth
         if denom <= 0.0001:
             denom = 0.0001
-        justified_pe = (1.0 - payout_ratio) / max(denom, 0.01)#stops the terminal value from exploding if cost of equity is close to the growth rate
-        terminal_pe = float(np.clip(justified_pe, 5, 14))#Use 14x as cap because historically, most matured firms that's in the financials/insurance/reinsurance has a one of around 10-13 but I use 14 just to be conservative
+        justified_pe = (1.0 - payout_ratio) / max(denom, 0.01)# stops the terminal value from exploding if cost of equity is close to the growth rate
+        terminal_pe = float(np.clip(justified_pe, 5, 14))# Use 14x as cap because historically, most matured firms that's in the financials/insurance/reinsurance has a one of around 10-13 but I use 14 just to be conservative
         terminal_value = (last_eps * terminal_pe) / ((1.0 + cost_of_equity) ** years)
         intrinsic_per_share = sum(projected_eps) + terminal_value
 
@@ -241,13 +242,51 @@ def intrinsic_value_calculator(ticker, terminal_growth=0.01, years=10, max_growt
         growth_rate = max(min(growth_rate, max_growth_cap), -0.6)
 
         # Discount Rate (CAPM)
-        risk_free, market_return = 0.045, 0.09
+
+        risk_free, market_return, market_premium = 0.045, 0.09, 0.045
+        market_cap = float(info.get("marketCap") or 0)
         beta = stock.info.get("beta", 1.0) or 1.0
         try:
             beta = float(beta)
         except Exception:
             beta = 1.0
-        discount_rate = risk_free + beta * (market_return - risk_free)
+
+        # Adjusted (Blume) beta
+        adj_beta = 0.67 * beta + 0.33 * 1.0
+
+        #Base CAPM
+        capm = risk_free + adj_beta * market_premium
+
+        # Sector-based rates
+        if any(k in sector for k in ["Utility", "Defensive"]):
+            base_low, base_high = 0.07, 0.08
+        elif any(k in sector for k in ["Consumer Defensive", "Consumer Defensive"]):
+            base_low, base_high = 0.075, 0.09
+        elif any(k in sector for k in ["Health", "Industrial"]):
+            base_low, base_high = 0.09, 0.11
+        elif any(k in sector for k in ["Technology", "Semiconductor", "Software", "Communication"]):
+            base_low, base_high = 0.095, 0.12
+        elif any(k in sector for k in ["Energy", "Materials"]):
+            base_low, base_high = 0.10, 0.14
+        else:
+            base_low, base_high = 0.09, 0.12  # fallback
+
+        # Adjust for market cap
+        if market_cap > 200_000_000_000:
+            cap_adj = -0.01  # large cap: slightly safer
+        elif market_cap < 2_000_000_000:
+            cap_adj = 0.01  # small cap premium
+        else:
+            cap_adj = 0.0
+
+        # Blend everything: move within sector band based on beta
+        position = np.clip((adj_beta - 0.8)/0.8, 0, 1)# normalize 0.8–1.6 beta range
+        sector_anchor = base_low + position * (base_high - base_low)
+        discount_rate = 0.6 * capm + 0.4 * sector_anchor
+        discount_rate = discount_rate + cap_adj
+
+        # Keep result in a reasonable corridor
+        discount_rate = float(np.clip(discount_rate, 0.05, 0.16))
 
         # Checks
         if not all([fcf and np.isfinite(fcf), shares_outstanding and shares_outstanding > 0,
