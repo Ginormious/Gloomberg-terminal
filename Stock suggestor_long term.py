@@ -368,19 +368,34 @@ def run_screen(tickers):
 
 
 # S&P 500 tickers
-import urllib.request
 import pandas as pd
+import requests
+from io import StringIO
 
 def get_sp500_tickers():
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"})
-    with urllib.request.urlopen(req) as response:
-        tables = pd.read_html(response.read())
-    # Extract symbols as a list of strings
-    sp500 = tables[0]["Symbol"].tolist()
-    # Some symbols on wikipedia have dots in between them but yfinance must use dashes instead.
-    sp500 = [s.replace(".", "-") for s in sp500]
-    return sp500
+    url = "https://www.slickcharts.com/sp500"
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+
+    resp = requests.get(url, headers=headers)
+    resp.raise_for_status()
+
+    # pandas now requires StringIO for HTML strings
+    tables = pd.read_html(StringIO(resp.text))
+
+    df = tables[0]
+
+    # Normalize columns
+    df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+
+    # Slickcharts always uses column "symbol"
+    if "symbol" not in df.columns:
+        raise RuntimeError(f"Unexpected SlickCharts columns: {df.columns}")
+
+    tickers = df["symbol"].astype(str).str.replace(".", "-", regex=False).tolist()
+    return tickers
+
 
 
 sp500 = get_sp500_tickers()
