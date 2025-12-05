@@ -363,7 +363,7 @@ def run_screen(tickers):
             print(f"Skipping {ticker}: {e}")
             continue
     df = pd.DataFrame(results)
-    df = df.sort_values("% Upside", ascending=False).head(50)
+    df = df.sort_values("% Upside", ascending=False).head(100)
     return df
 
 
@@ -396,8 +396,12 @@ def get_sp500_tickers():
     tickers = df["symbol"].astype(str).str.replace(".", "-", regex=False).tolist()
     return tickers
 
-
+pd.set_option('display.max_rows', None)
+pd.set_option('display.max_columns', None)
+pd.set_option('display.width', None)
+pd.set_option('display.max_colwidth', None)
 
 sp500 = get_sp500_tickers()
-top50 = run_screen(sp500)
-print(top50)
+top100 = run_screen(sp500)
+print(top100)
+
