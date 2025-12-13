@@ -817,7 +817,7 @@ class ImpliedVolatilityPortfolioOptimizer:
                 'weights': {'historical': avg_w_hist, 'iv_based': w_iv_fixed, 'intrinsic': avg_w_intrinsic}
             }
 
-            self._print_compound_return_breakdown(mu_hist, mu_iv, mu_intrinsic, avg_w_hist, w_iv_fixed, avg_w_intrinsic)
+            self.print_compound_return_breakdown(mu_hist, mu_iv, mu_intrinsic, avg_w_hist, w_iv_fixed, avg_w_intrinsic)
         else:
             self.mu_final = self.blend_alpha * mu_hist + (1.0 - self.blend_alpha) * mu_iv
             self._return_components = {
@@ -828,7 +828,7 @@ class ImpliedVolatilityPortfolioOptimizer:
         self.mu_final = pd.Series(np.clip(self.mu_final.values, -0.5, 1.5), index=self.tickers)
         print(f"  Final expected returns: [{self.mu_final.min():.1%}, {self.mu_final.max():.1%}]")
 
-    def _print_compound_return_breakdown(self, mu_hist, mu_iv, mu_intrinsic, avg_w_hist, w_iv_fixed, avg_w_intrinsic):
+    def print_compound_return_breakdown(self, mu_hist, mu_iv, mu_intrinsic, avg_w_hist, w_iv_fixed, avg_w_intrinsic):
         #Print return breakdown table
 
         # A list of the 100 tradable ETFs from the wharton rules website
@@ -1062,7 +1062,7 @@ if __name__ == "__main__":
 
     tickers = [
         "EXC", "UNH", "META", "FCX", "VZ", "QQQ", "IWM", "VTI",
-        "VXUS", "TLT", "IEF", "SHY", "AGG", "LQD"
+        "VXUS", "TLT", "IEF", "SHY", "AGG", "LQD", "ARKK", "IPO", "HIMS"
     ]
 
     optimizer = ImpliedVolatilityPortfolioOptimizer(
